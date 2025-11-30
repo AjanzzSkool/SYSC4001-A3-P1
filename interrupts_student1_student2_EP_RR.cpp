@@ -1,11 +1,14 @@
 /**
  * @file interrupts.cpp
  * @author Sasisekhar Govind
+ * @author Ajan Balaganesh
+ * @author Kyle Deng
  * @brief template main.cpp file for Assignment 3 Part 1 of SYSC4001
  * 
  */
 
-#include<interrupts_student1_student2.hpp>
+#include "interrupts_student1_student2.hpp"
+#include<map>
 
 void FCFS(std::vector<PCB> &ready_queue) {
     std::sort( 
@@ -16,6 +19,7 @@ void FCFS(std::vector<PCB> &ready_queue) {
                 } 
             );
 }
+
 
 std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std::vector<PCB> list_processes) {
 
@@ -34,6 +38,18 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
 
     std::string execution_status;
 
+
+
+    
+    std::map<int,unsigned int>    time_to_io;
+    std::map<int,unsigned int>    io_remaining;
+    unsigned int                  quantum  = 100;
+    unsigned int                  qcounter = 0;
+
+    for (auto &p : list_processes) {
+        time_to_io[p.PID]   = p.io_freq;
+        io_remaining[p.PID] = 0;
+    }    
     //make the output table (the header row)
     execution_status = print_exec_header();
 
@@ -64,10 +80,104 @@ std::tuple<std::string /* add std::string for bonus mark */ > run_simulation(std
         ///////////////////////MANAGE WAIT QUEUE/////////////////////////
         //This mainly involves keeping track of how long a process must remain in the ready queue
 
-        /////////////////////////////////////////////////////////////////
 
+        for (std::size_t i = 0; i < wait_queue.size(); ) {
+            PCB p = wait_queue[i];
+
+            if (io_remaining[p.PID] > 0) {
+                io_remaining[p.PID]--;
+            }
+   //put process in ready queue once io done
+            if (io_remaining[p.PID] == 0) {
+                states old = p.state;
+                p.state = READY;
+                sync_queue(job_list, p);
+                ready_queue.push_back(p);
+                execution_status += print_exec_status(current_time, p.PID, old, READY);
+                wait_queue.erase(wait_queue.begin() + i);
+            } else {
+                ++i;
+            }
+        }
+        /////////////////////////////////////////////////////////////////
+        if (running.state == RUNNING) {
+
+            if (running.remaining_time > 0) {
+                running.remaining_time--;
+            }
+
+            if (running.io_freq > 0 && time_to_io[running.PID] > 0) {
+                time_to_io[running.PID]--;
+            }
+
+            qcounter++;
+
+       // Process done
+            if (running.remaining_time == 0) {
+                states old = RUNNING;
+                terminate_process(running, job_list);
+                execution_status += print_exec_status(current_time, running.PID, old, TERMINATED);
+                idle_CPU(running);
+                qcounter = 0;
+            }
+      // IO gets trigerred and process gets put in wait queue
+            else if (running.io_freq > 0 && time_to_io[running.PID] == 0) {
+                states old = RUNNING;
+                running.state = WAITING;
+                sync_queue(job_list, running);
+                io_remaining[running.PID] = running.io_duration;
+                time_to_io[running.PID]   = running.io_freq;
+                execution_status += print_exec_status(current_time, running.PID, old, WAITING);
+                wait_queue.push_back(running);
+                idle_CPU(running);
+                qcounter = 0;
+            }
+            else {
+                sync_queue(job_list, running);
+            }
+        }
         //////////////////////////SCHEDULER//////////////////////////////
-        FCFS(ready_queue); //example of FCFS is shown here
+        
+       //using index this time because we kept running into memory error
+
+        if (!ready_queue.empty()) {
+
+            int best_idx = 0;
+
+        // schedule up the highest priority process in ready queue for next
+            for (int i = 1; i < ready_queue.size(); ++i) {
+                if (ready_queue[i].PID < ready_queue[best_idx].PID) {
+                    best_idx = i;
+                }
+            }
+
+            PCB next = ready_queue[best_idx];
+           
+             // switch only if higher priority process or quantum's done or state is unassigned
+            bool should_switch = (running.state == NOT_ASSIGNED) || (next.PID < running.PID) ||(qcounter == quantum);
+
+            if (should_switch) {
+                if (running.state == RUNNING) {
+                    states old = RUNNING;
+                    running.state = READY;
+                    sync_queue(job_list, running);
+                    ready_queue.push_back(running);
+                    execution_status += print_exec_status(current_time, running.PID, old, READY);
+                }
+
+                ready_queue.erase(ready_queue.begin() + best_idx);
+
+                states old = next.state;
+                next.state = RUNNING;
+                if (next.start_time == -1) next.start_time = current_time;
+                running = next;
+                sync_queue(job_list, running);
+                execution_status += print_exec_status(current_time, running.PID, old, RUNNING);
+                qcounter = 0;
+            }
+        }
+
+        current_time++;
         /////////////////////////////////////////////////////////////////
 
     }
